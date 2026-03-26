@@ -1,4 +1,5 @@
 require('dotenv').config();
+
 const ffmpeg = require('ffmpeg-static');
 process.env.FFMPEG_PATH = ffmpeg;
 
@@ -18,10 +19,9 @@ const client = new Client({
 });
 
 client.once('clientReady', () => {
-  console.log('Bot encendido 🔥');
+  console.log('Bot encendido');
 });
 
-// 🎯 Mapa usuario → sonido
 const sonidos = {
   "434742097417863172": "./sonidos/oscar.mp3", 
   "631159167050055681": "./sonidos/maria.mp3",
@@ -34,39 +34,70 @@ const sonidos = {
   "1001971933669249125": "./sonidos/suneo.mp3",
 };
 
+let cola = [];
+let reproduciendo = false;
+let conexionActual = null;
+let playerActual = null;
+
+async function reproducirSiguiente(guild, channelId) {
+
+  if (cola.length === 0) {
+    reproduciendo = false;
+    if (conexionActual) {
+      conexionActual.destroy();
+      conexionActual = null;
+    }
+    playerActual = null;
+    return;
+  }
+
+  reproduciendo = true;
+  const rutaSonido = cola.shift();
+
+  try {
+    if (!conexionActual) {
+      conexionActual = joinVoiceChannel({
+        channelId: channelId,
+        guildId: guild.id,
+        adapterCreator: guild.voiceAdapterCreator,
+      });
+    } 
+
+    if (!playerActual) {
+      playerActual = createAudioPlayer();
+      conexionActual.subscribe(playerActual);
+
+      playerActual.on(AudioPlayerStatus.Idle, () => {
+        reproducirSiguiente(guild, channelId);
+      });
+
+      playerActual.on('error', (err) => {
+      });
+    } 
+
+    const resource = createAudioResource(rutaSonido, { inlineVolume: true });
+    resource.volume.setVolume(1);
+    playerActual.play(resource);
+
+  } catch (error) {
+    conexionActual = null;
+    playerActual = null;
+    reproducirSiguiente(guild, channelId);
+  }
+}
+
 client.on('voiceStateUpdate', async (oldState, newState) => {
   if (!oldState.channel && newState.channel) {
-
-    // 🚫 Ignorar bots (MUY IMPORTANTE)
     if (newState.member.user.bot) return;
 
     const userId = newState.id;
-
     const rutaSonido = sonidos[userId] || "./audio.mp3";
 
-    console.log("ID detectado:", userId);
-    console.log("Reproduciendo:", rutaSonido);
+    cola.push(rutaSonido);
 
-    try {
-      const connection = joinVoiceChannel({
-        channelId: newState.channel.id,
-        guildId: newState.guild.id,
-        adapterCreator: newState.guild.voiceAdapterCreator,
-      });
-
-      const player = createAudioPlayer();
-      const resource = createAudioResource(rutaSonido);
-
-      player.play(resource);
-      connection.subscribe(player);
-
-      player.on(AudioPlayerStatus.Idle, () => {
-        connection.destroy();
-      });
-
-    } catch (error) {
-      console.log(error);
-    }
+    if (!reproduciendo) {
+      reproducirSiguiente(newState.guild, newState.channel.id);
+    } 
   }
 });
 
